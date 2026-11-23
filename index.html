@@ -319,7 +319,7 @@ $('#xcam').onchange=async e=>{
     const cv=document.createElement('canvas');cv.width=Math.round(bmp.width*k);cv.height=Math.round(bmp.height*k);
     cv.getContext('2d').drawImage(bmp,0,0,cv.width,cv.height);
     const image=cv.toDataURL('image/jpeg',0.85).split(',')[1];
-    const {data,error}=await sb.functions.invoke('scan-receipt',{body:{image,mime:'image/jpeg',types:typeList()}});
+    const {data,error}=await sb.functions.invoke('smooth-responder',{body:{image,mime:'image/jpeg',types:typeList()}});
     if(error||!data||data.error){let d='napaka';try{d=(error&&error.context?await error.context.json():data).error||d}catch(_){}throw new Error(d)}
     xclear();const miss=[];
     if(data.day)$('#xd').value=data.day;else miss.push('datum');
