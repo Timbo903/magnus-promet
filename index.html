@@ -16,7 +16,7 @@ header{background:var(--olive);color:#fff;padding:14px 16px;display:flex;align-i
 header h1{font-size:1.35rem}
 main{max-width:640px;margin:0 auto;padding:16px}
 nav{display:flex;background:var(--wood-l);border-bottom:1px solid var(--wood)}
-nav button{flex:1;padding:12px;border:0;background:none;font:inherit;color:var(--olive);cursor:pointer;border-bottom:3px solid transparent}
+nav button{flex:1;padding:12px 2px;border:0;background:none;font:inherit;font-size:.9rem;color:var(--olive);cursor:pointer;border-bottom:3px solid transparent}
 nav button[aria-selected=true]{font-weight:700;border-bottom-color:var(--olive)}
 label{display:block;font-weight:600;margin:14px 0 4px}
 input,textarea,select{width:100%;padding:12px;font:inherit;color:var(--olive);border:1.5px solid var(--wood);border-radius:6px;background:#fff}
@@ -51,7 +51,7 @@ tfoot td{font-weight:700;border-top:2px solid var(--olive)}
 </main>
 
 <div id="app" class="hide">
-  <nav role="tablist"><button role="tab" id="t1" aria-selected="true">Vnos</button><button role="tab" id="t2" aria-selected="false">Pregled</button><button role="tab" id="t3" aria-selected="false">Statistika</button></nav>
+  <nav role="tablist"><button role="tab" id="t1" aria-selected="true">Vnos</button><button role="tab" id="t2" aria-selected="false">Pregled</button><button role="tab" id="t4" aria-selected="false">Stroški</button><button role="tab" id="t3" aria-selected="false">Statistika</button></nav>
 
   <main id="v1">
     <label for="day">Datum</label><input id="day" type="date">
@@ -87,6 +87,25 @@ tfoot td{font-weight:700;border-top:2px solid var(--olive)}
       <thead><tr><th>Mesec</th><th>Gotovina</th><th>Kartica</th><th>Posebna</th><th>Skupaj</th></tr></thead>
       <tbody id="sb"></tbody>
     </table></div>
+    <h2>Stroški po tipih</h2>
+    <div class="tbl"><table><tbody id="sx"></tbody></table></div>
+  </main>
+
+  <main id="v4" class="hide">
+    <label for="xd">Datum</label><input id="xd" type="date">
+    <label for="xt">Tip stroška</label><input id="xt" list="types" maxlength="40" autocomplete="off"><datalist id="types"></datalist>
+    <label for="xa">Znesek (€)</label><input id="xa" inputmode="decimal" placeholder="0,00">
+    <label for="xo">Opis</label><input id="xo" maxlength="300">
+    <p class="row"><button class="btn" id="xs">Shrani strošek</button><button class="btn alt hide" id="xx">Prekliči</button><button class="btn alt hide" id="xdel">Izbriši</button></p>
+    <div id="xmsg" role="status"></div>
+    <h2>Seznam stroškov</h2>
+    <label for="xm">Mesec</label><input id="xm" type="month">
+    <div class="tbl"><table>
+      <thead><tr><th>Datum</th><th>Tip</th><th>Opis</th><th>Znesek</th></tr></thead>
+      <tbody id="xb"></tbody><tfoot id="xf"></tfoot>
+    </table></div>
+    <p class="small">Klik na vrstico omogoča popravljanje ali brisanje.</p>
+    <div class="row"><button class="btn" id="xxl">Izvoz Excel</button><button class="btn alt" id="xpdf">Izvoz PDF</button></div>
   </main>
 </div>
 
@@ -101,6 +120,8 @@ const eur=n=>Number(n||0).toLocaleString('sl-SI',{style:'currency',currency:'EUR
 const load=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d}catch(e){return d}};
 let rows=load('rows',{}), queue=load('queue',[]);
 const persist=()=>{localStorage.setItem('rows',JSON.stringify(rows));localStorage.setItem('queue',JSON.stringify(queue))};
+let ex=load('ex',{}), xq=load('xq',[]), editId=null;
+const persistX=()=>{localStorage.setItem('ex',JSON.stringify(ex));localStorage.setItem('xq',JSON.stringify(xq))};
 const today=()=>{const d=new Date();return new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10)};
 const num=v=>{const n=parseFloat(String(v).replace(',','.'));return isNaN(n)?0:n};
 const dmy=d=>d.slice(8)+'. '+d.slice(5,7)+'. '+d.slice(0,4);
@@ -110,18 +131,25 @@ async function init(){
   const {data}=await sb.auth.getSession();
   const ok=!!data.session;
   $('#login').classList.toggle('hide',ok);$('#app').classList.toggle('hide',!ok);$('#out').classList.toggle('hide',!ok);
-  if(ok){await sync();fill();render()}
+  if(ok){await sync();fill();render();xfillTypes();xrender()}
 }
 $('#in').onclick=async()=>{
   const {error}=await sb.auth.signInWithPassword({email:$('#em').value.trim(),password:$('#pw').value});
   if(error){$('#lmsg').textContent='Prijava ni uspela. Preveri e-pošto in geslo.';return}
   $('#pw').value='';init();
 };
-$('#out').onclick=async()=>{await sb.auth.signOut();rows={};queue=[];persist();init()};
+$('#out').onclick=async()=>{await sb.auth.signOut();rows={};queue=[];persist();ex={};xq=[];persistX();init()};
 
 // Sinhronizacija
+async function syncX(){
+  if(xq.length){const {error}=await sb.from('expenses').upsert(xq.map(r=>({...r,updated_at:new Date().toISOString()})),{onConflict:'id'});if(!error)xq=[]}
+  const {data,error}=await sb.from('expenses').select('id,day,type,amount,description').order('day',{ascending:false}).limit(3000);
+  if(!error&&data){ex={};data.forEach(r=>ex[r.id]=r);xq.forEach(r=>ex[r.id]=r)}
+  persistX();
+}
 async function sync(){
   if(!navigator.onLine)return;
+  await syncX();
   if(queue.length){
     const {error}=await sb.from('daily_revenue').upsert(queue.map(r=>({...r,updated_at:new Date().toISOString()})),{onConflict:'day'});
     if(!error)queue=[];
@@ -130,7 +158,7 @@ async function sync(){
   if(!error&&data){const q=Object.fromEntries(queue.map(r=>[r.day,r]));rows={};data.forEach(r=>rows[r.day]=r);Object.assign(rows,q)}
   persist();
 }
-addEventListener('online',async()=>{await sync();fill();render()});
+addEventListener('online',async()=>{await sync();fill();render();xfillTypes();xrender()});
 
 // Vnos
 function fill(){
@@ -175,18 +203,18 @@ function render(){
   ['Skupaj',eur(T.cash),eur(T.card),eur(T.sp),eur(T.cash+T.card+T.sp)].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.append(td)});tf.append(tr);
 }
 function tab(n){
-  [1,2,3].forEach(i=>{$('#v'+i).classList.toggle('hide',n!==i);$('#t'+i).setAttribute('aria-selected',n===i)});
-  if(n===2)render();if(n===3)stats();
+  [1,2,3,4].forEach(i=>{$('#v'+i).classList.toggle('hide',n!==i);$('#t'+i).setAttribute('aria-selected',n===i)});
+  if(n===2)render();if(n===3)stats();if(n===4)xrender();
 }
 function stats(){
-  const sel=$('#yr'),ys=[...new Set(Object.keys(rows).map(d=>d.slice(0,4)))].sort().reverse();
+  const sel=$('#yr'),ys=[...new Set(Object.keys(rows).concat(Object.values(ex).map(r=>r.day)).map(d=>d.slice(0,4)))].sort().reverse();
   const cur=sel.value||ys[0]||'all';sel.textContent='';
   [['all','Vse skupaj'],...ys.map(y=>[y,'Leto '+y])].forEach(([v,t])=>{const o=document.createElement('option');o.value=v;o.textContent=t;sel.append(o)});
   sel.value=[...sel.options].some(o=>o.value===cur)?cur:'all';
   const list=Object.values(rows).filter(r=>sel.value==='all'||r.day.startsWith(sel.value));
   const s=(l,k)=>l.reduce((a,r)=>a+ +r[k],0),c=s(list,'cash'),k=s(list,'card'),p=s(list,'special_cash'),t=c+k+p;
-  const st=$('#st');st.textContent='';
-  [['Gotovina',eur(c)],['Kartica',eur(k)],['Blagajna skupaj',eur(c+k)],['Posebna blagajna',eur(p)],['Skupaj',eur(t),'tot'],['Dni z vnosom',list.length],['Povprečje na dan',eur(list.length?t/list.length:0)]].forEach(([a,b,cl])=>{
+  const xl=Object.values(ex).filter(r=>sel.value==='all'||r.day.startsWith(sel.value)),xs=s(xl,'amount');const st=$('#st');st.textContent='';
+  [['Gotovina',eur(c)],['Kartica',eur(k)],['Blagajna skupaj',eur(c+k)],['Posebna blagajna',eur(p)],['Skupaj',eur(t),'tot'],['Stroški',eur(xs)],['Promet minus stroški',eur(t-xs),'tot'],['Dni z vnosom',list.length],['Povprečje na dan',eur(list.length?t/list.length:0)]].forEach(([a,b,cl])=>{
     const d=document.createElement('div');if(cl)d.className=cl;
     const x=document.createElement('span'),y=document.createElement('span');x.textContent=a;y.textContent=b;d.append(x,y);st.append(d);
   });
@@ -198,8 +226,12 @@ function stats(){
     tr.onclick=()=>{$('#mon').value=m;tab(2)};tb.append(tr);
   });
   if(!list.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=5;td.textContent='Še ni vnosov.';tr.append(td);tb.append(tr)}
+  const bt={};xl.forEach(r=>{const k=r.type.toLowerCase();(bt[k]=bt[k]||{n:r.type,v:0}).v+=+r.amount});
+  const sx=$('#sx');sx.textContent='';
+  Object.values(bt).sort((a,b)=>b.v-a.v).forEach(o=>{const tr=document.createElement('tr');[o.n,eur(o.v)].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.append(td)});sx.append(tr)});
+  if(!xl.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=2;td.textContent='Še ni stroškov.';tr.append(td);sx.append(tr)}
 }
-$('#t1').onclick=()=>tab(1);$('#t2').onclick=()=>tab(2);$('#t3').onclick=()=>tab(3);$('#yr').addEventListener('change',stats);$('#mon').addEventListener('change',render);
+$('#t1').onclick=()=>tab(1);$('#t2').onclick=()=>tab(2);$('#t3').onclick=()=>tab(3);$('#t4').onclick=()=>tab(4);$('#yr').addEventListener('change',stats);$('#mon').addEventListener('change',render);
 
 // Izvoz
 $('#xl').onclick=()=>{
@@ -223,6 +255,59 @@ $('#pdf').onclick=()=>{
   doc.save('Magnus-promet-'+m+'.pdf');
 };
 
+// Stroški
+const DEF=['Agrohram','Trgovina','Material','Petrol','Drugo'];
+function typeList(){const m={};DEF.forEach(t=>m[t.toLowerCase()]=t);Object.values(ex).forEach(r=>{const k=r.type.toLowerCase();if(!m[k])m[k]=r.type});return Object.values(m)}
+function xfillTypes(){const d=$('#types');d.textContent='';typeList().forEach(t=>{const o=document.createElement('option');o.value=t;d.append(o)})}
+const normType=t=>{t=t.trim();return typeList().find(x=>x.toLowerCase()===t.toLowerCase())||t};
+const xmRows=()=>Object.values(ex).filter(r=>r.day.startsWith($('#xm').value)).sort((a,b)=>a.day.localeCompare(b.day));
+function xclear(){editId=null;$('#xd').value=today();$('#xt').value='';$('#xa').value='';$('#xo').value='';$('#xx').classList.add('hide');$('#xdel').classList.add('hide')}
+function xrender(){
+  const l=xmRows(),tb=$('#xb');tb.textContent='';let T=0;
+  l.forEach(r=>{
+    T+=+r.amount;const tr=document.createElement('tr');tr.className='d';
+    [dmy(r.day).slice(0,6),r.type,r.description||'',eur(r.amount)].forEach((t,i)=>{const td=document.createElement('td');td.textContent=t;if(i===1||i===2)td.style.textAlign='left';tr.append(td)});
+    tr.onclick=()=>{editId=r.id;$('#xd').value=r.day;$('#xt').value=r.type;$('#xa').value=String(r.amount).replace('.',',');$('#xo').value=r.description||'';$('#xx').classList.remove('hide');$('#xdel').classList.remove('hide');$('#xmsg').textContent='';scrollTo(0,0)};
+    tb.append(tr);
+  });
+  if(!l.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=4;td.textContent='V tem mesecu še ni stroškov.';tr.append(td);tb.append(tr)}
+  const tf=$('#xf');tf.textContent='';const tr=document.createElement('tr');
+  ['Skupaj','','',eur(T)].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.append(td)});tf.append(tr);
+}
+$('#xm').addEventListener('change',xrender);$('#xx').onclick=()=>{xclear();$('#xmsg').textContent=''};
+$('#xs').onclick=async()=>{
+  const m=$('#xmsg');m.className='err';
+  const r={id:editId||crypto.randomUUID(),day:$('#xd').value,type:normType($('#xt').value),amount:num($('#xa').value),description:$('#xo').value.trim()||null};
+  if(!r.day||!r.type){m.textContent='Vpiši datum in tip stroška.';return}
+  if(!(r.amount>0)||r.amount>1e7){m.textContent='Znesek mora biti večji od 0 in manjši od 10.000.000 €.';return}
+  ex[r.id]=r;let ok=false;
+  if(navigator.onLine){const {error}=await sb.from('expenses').upsert({...r,updated_at:new Date().toISOString()},{onConflict:'id'});ok=!error}
+  if(!ok){xq=xq.filter(q=>q.id!==r.id);xq.push(r)}
+  persistX();xclear();xfillTypes();xrender();
+  m.className='';m.textContent=ok?'Shranjeno.':'Ni povezave. Strošek je shranjen v telefonu in se bo poslal ob vrnitvi povezave.';
+};
+$('#xdel').onclick=async()=>{
+  const m=$('#xmsg');if(!editId||!confirm('Izbrišem ta strošek?'))return;
+  if(!navigator.onLine){m.className='err';m.textContent='Brisanje zahteva internetno povezavo.';return}
+  const {error}=await sb.from('expenses').delete().eq('id',editId);
+  if(error){m.className='err';m.textContent='Brisanje ni uspelo.';return}
+  delete ex[editId];xq=xq.filter(q=>q.id!==editId);persistX();xclear();xrender();m.className='';m.textContent='Izbrisano.';
+};
+$('#xxl').onclick=()=>{
+  const l=xmRows(),m=$('#xm').value,aoa=[['Datum','Tip','Opis','Znesek']];
+  l.forEach(r=>aoa.push([dmy(r.day),r.type,r.description||'',+r.amount]));
+  aoa.push(['Skupaj','','',l.reduce((a,r)=>a+ +r.amount,0)]);
+  const ws=XLSX.utils.aoa_to_sheet(aoa);ws['!cols']=[{wch:12},{wch:16},{wch:40},{wch:12}];
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,m);XLSX.writeFile(wb,'Magnus-stroski-'+m+'.xlsx');
+};
+$('#xpdf').onclick=()=>{
+  const l=xmRows(),m=$('#xm').value,doc=new jspdf.jsPDF(),T=l.reduce((a,r)=>a+ +r.amount,0);
+  doc.setFontSize(16);doc.text(ascii('Kavarna Magnus - stroski '+m.slice(5)+'/'+m.slice(0,4)),14,16);
+  doc.autoTable({startY:22,head:[['Datum','Tip','Opis','Znesek']],body:l.map(r=>[dmy(r.day),ascii(r.type),ascii(r.description||''),ascii(eur(r.amount))]),
+    foot:[['Skupaj','','',ascii(eur(T))]],headStyles:{fillColor:[63,74,42]},footStyles:{fillColor:[200,162,122],textColor:[63,74,42]},styles:{fontSize:9}});
+  doc.save('Magnus-stroski-'+m+'.pdf');
+};
+$('#xd').value=today();$('#xm').value=today().slice(0,7);xfillTypes();
 $('#day').value=today();$('#mon').value=today().slice(0,7);
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');
 init();
